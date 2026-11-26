@@ -78,6 +78,10 @@ class Permissions
 
     public const AUDIT_VIEW = 'audit.view';
 
+    public const ACCOUNTING_VIEW = 'accounting.view';
+
+    public const ACCOUNTING_MANAGE = 'accounting.manage';
+
     /**
      * Role => permissions. Super administrator receives every permission at runtime.
      *
@@ -116,6 +120,8 @@ class Permissions
                     self::USERS_MANAGE,
                     self::AUDIT_VIEW,
                     self::SETTINGS_MANAGE,
+                    self::ACCOUNTING_VIEW,
+                    self::ACCOUNTING_MANAGE,
                 ]),
             ],
             'medical_director' => [
@@ -251,6 +257,8 @@ class Permissions
                     self::REFUNDS_APPROVE,
                     self::REPORTS_VIEW,
                     self::REPORTS_EXPORT,
+                    self::ACCOUNTING_VIEW,
+                    self::ACCOUNTING_MANAGE,
                 ],
             ],
             'insurance_officer' => [
@@ -271,6 +279,26 @@ class Permissions
                     self::DASHBOARD_VIEW,
                     self::USERS_MANAGE,
                     self::REPORTS_VIEW,
+                ],
+            ],
+            'metron' => [
+                'ar' => 'ممرضة رئيسة',
+                'en' => 'Head Nurse (Metron)',
+                'permissions' => array_merge($clinical, [
+                    self::VITALS_CREATE,
+                    self::CLINICAL_NOTES_CREATE,
+                    self::QUEUES_MANAGE,
+                    self::LABORATORY_VIEW,
+                ]),
+            ],
+            'sample_collector' => [
+                'ar' => 'محضر عينات',
+                'en' => 'Sample Collector',
+                'permissions' => [
+                    self::DASHBOARD_VIEW,
+                    self::PATIENTS_VIEW,
+                    self::LABORATORY_VIEW,
+                    self::LABORATORY_MANAGE,
                 ],
             ],
             'auditor' => [
@@ -331,6 +359,8 @@ class Permissions
             self::ROLES_MANAGE,
             self::BRANCHES_MANAGE,
             self::AUDIT_VIEW,
+            self::ACCOUNTING_VIEW,
+            self::ACCOUNTING_MANAGE,
         ];
     }
 
@@ -377,6 +407,8 @@ class Permissions
             self::ROLES_MANAGE => ['ar' => 'إدارة الأدوار', 'en' => 'Manage roles'],
             self::BRANCHES_MANAGE => ['ar' => 'إدارة الفروع', 'en' => 'Manage branches'],
             self::AUDIT_VIEW => ['ar' => 'عرض سجل التدقيق', 'en' => 'View audit log'],
+            self::ACCOUNTING_VIEW => ['ar' => 'عرض المحاسبة', 'en' => 'View accounting'],
+            self::ACCOUNTING_MANAGE => ['ar' => 'إدارة المحاسبة', 'en' => 'Manage accounting'],
         ];
     }
 }

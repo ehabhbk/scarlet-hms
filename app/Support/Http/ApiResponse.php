@@ -49,15 +49,22 @@ class ApiResponse
 
     public static function paginated(
         LengthAwarePaginator $paginator,
-        AnonymousResourceCollection $collection,
+        mixed $collection = null,
         ?string $message = null
     ): JsonResponse {
-        $response = $collection->response()->getData(true);
+        if ($collection instanceof AnonymousResourceCollection) {
+            $response = $collection->response()->getData(true);
+            $data = $response['data'];
+        } elseif (is_array($collection)) {
+            $data = $collection;
+        } else {
+            $data = $paginator->items();
+        }
 
         return response()->json([
             'success' => true,
             'message' => $message ?? __('messages.ok'),
-            'data' => $response['data'],
+            'data' => $data,
             'meta' => [
                 'pagination' => [
                     'current_page' => $paginator->currentPage(),

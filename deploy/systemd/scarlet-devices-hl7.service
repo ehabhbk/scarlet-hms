@@ -1,0 +1,19 @@
+[Unit]
+Description=Scarlet HMS HL7/ASTM device listener
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/scarlet-hms
+ExecStart=/usr/bin/php /var/www/scarlet-hms/artisan devices:listen --host=0.0.0.0 --lab-port=2575 --radiology-port=2576
+Restart=always
+RestartSec=5
+TimeoutStopSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

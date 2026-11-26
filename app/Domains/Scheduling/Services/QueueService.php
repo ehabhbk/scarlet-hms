@@ -8,6 +8,7 @@ use App\Domains\Patients\Models\Patient;
 use App\Domains\Scheduling\Events\QueueAssigned;
 use App\Domains\Scheduling\Models\Appointment;
 use App\Domains\Scheduling\Models\QueueTicket;
+use App\Events\QueueUpdated;
 use App\Support\Sequences\SequenceService;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -108,7 +109,8 @@ class QueueService
     public function call(QueueTicket $ticket, User $actor): QueueTicket
     {
         if (in_array($ticket->status, [QueueTicket::STATUS_CALLED, QueueTicket::STATUS_IN_PROGRESS], true)) {
-            return $ticket;
+            event(new QueueUpdated($ticket->branch_id));
+        return $ticket;
         }
 
         if (! in_array($ticket->status, [QueueTicket::STATUS_WAITING, QueueTicket::STATUS_SKIPPED, QueueTicket::STATUS_NO_SHOW], true)) {
@@ -156,7 +158,8 @@ class QueueService
     public function start(QueueTicket $ticket, User $actor): QueueTicket
     {
         if ($ticket->status === QueueTicket::STATUS_IN_PROGRESS) {
-            return $ticket;
+            event(new QueueUpdated($ticket->branch_id));
+        return $ticket;
         }
 
         if (! in_array($ticket->status, [QueueTicket::STATUS_CALLED, QueueTicket::STATUS_WAITING], true)) {
@@ -204,7 +207,8 @@ class QueueService
     public function complete(QueueTicket $ticket, User $actor): QueueTicket
     {
         if ($ticket->status === QueueTicket::STATUS_COMPLETED) {
-            return $ticket;
+            event(new QueueUpdated($ticket->branch_id));
+        return $ticket;
         }
 
         if (! in_array($ticket->status, [QueueTicket::STATUS_IN_PROGRESS, QueueTicket::STATUS_CALLED], true)) {

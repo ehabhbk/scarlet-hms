@@ -30,6 +30,16 @@ class SettingSeeder extends Seeder
             ['audit_retention_days', 3650, 'audit', false],
             ['session_timeout_minutes', 60, 'security', false],
             ['support_email', 'support@scarlet.care', 'general', true],
+            ['service_default_price', 0, 'services', true],
+            ['lab_auto_approve', false, 'laboratory', false],
+            ['lab_device_sync_interval', 60, 'laboratory', false],
+            ['whatsapp_enabled', false, 'whatsapp', false],
+            ['whatsapp_api_url', '', 'whatsapp', false],
+            ['whatsapp_token', '', 'whatsapp', false],
+            ['display_refresh_seconds', 5, 'display', true],
+            ['display_show_doctor', true, 'display', true],
+            ['clinic_default_duration', 20, 'clinics', true],
+            ['clinic_allow_overbooking', false, 'clinics', false],
         ];
 
         foreach ($settings as [$key, $value, $group, $isPublic]) {

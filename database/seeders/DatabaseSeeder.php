@@ -18,5 +18,7 @@ class DatabaseSeeder extends Seeder
         if (config('scarlet.seed_demo_data')) {
             $this->call(DemoClinicalSeeder::class);
         }
+
+        $this->call(CatalogSeeder::class);
     }
 }

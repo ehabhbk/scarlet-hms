@@ -78,6 +78,15 @@ class UserSeeder extends Seeder
                 'department_id' => $department('EMR'),
             ],
             [
+                'name' => 'ليلى منصور',
+                'username' => 'labtech',
+                'email' => 'labtech@scarlet.care',
+                'phone' => '0900000011',
+                'job_title' => 'فني مختبر',
+                'roles' => ['laboratory_technician'],
+                'department_id' => $department('LAB'),
+            ],
+            [
                 'name' => 'خالد عمر',
                 'username' => 'lab',
                 'email' => 'lab@scarlet.care',
