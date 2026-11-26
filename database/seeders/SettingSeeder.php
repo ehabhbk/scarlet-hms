@@ -33,6 +33,7 @@ class SettingSeeder extends Seeder
             ['service_default_price', 0, 'services', true],
             ['lab_auto_approve', false, 'laboratory', false],
             ['lab_device_sync_interval', 60, 'laboratory', false],
+            ['lab_allow_empty_results', false, 'laboratory', false],
             ['whatsapp_enabled', false, 'whatsapp', false],
             ['whatsapp_api_url', '', 'whatsapp', false],
             ['whatsapp_token', '', 'whatsapp', false],

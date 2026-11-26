@@ -167,6 +167,192 @@ class DeviceMessageIngestService
         return str_contains($raw, 'MSH|') ? 'HL7' : 'ASTM';
     }
 
+    /**
+     * Extract only the values that belong to one order item, for technician review.
+     * Nothing here writes to the database or approves a result.
+     *
+     * @return array<int, array{parameter_id: int, code: string, name_ar: string, value: string, unit: ?string, flag: ?string}>
+     */
+    public function valuesForItem(LabDeviceMessage $message, LabOrderItem $item): array
+    {
+        $parsed = $this->parse($message->raw_message, $this->inferProtocol($message->raw_message));
+        $values = [];
+
+        foreach ($parsed['tests'] ?? [] as $testData) {
+            if (! $this->messageTestMatchesItem($item, $testData)) {
+                continue;
+            }
+
+            foreach ($testData['parameters'] ?? [] as $parameterData) {
+                $parameter = $this->findLabParameter($item, $parameterData);
+
+                if (! $parameter || ! filled($parameterData['value'] ?? null)) {
+                    continue;
+                }
+
+                $values[] = [
+                    'parameter_id' => (int) $parameter->id,
+                    'code' => (string) $parameter->code,
+                    'name_ar' => (string) $parameter->name_ar,
+                    'value' => (string) $parameterData['value'],
+                    'unit' => $parameterData['unit'] ?? null,
+                    'flag' => $this->normalizeFlag($parameterData['flag'] ?? null),
+                ];
+            }
+        }
+
+        if ($values === [] && $item->test->parameters()->doesntExist()) {
+            // Single-value tests have no configured parameters; expose the raw result
+            // with parameter_id 0 so the UI can fill the single result field.
+            foreach ($parsed['tests'] ?? [] as $testData) {
+                if (! $this->messageTestMatchesItem($item, $testData)) {
+                    continue;
+                }
+
+                $first = collect($testData['parameters'] ?? [])
+                    ->first(fn ($parameterData) => filled($parameterData['value'] ?? null));
+
+                if (! $first) {
+                    continue;
+                }
+
+                $values[] = [
+                    'parameter_id' => 0,
+                    'code' => 'RESULT',
+                    'name_ar' => 'النتيجة',
+                    'value' => (string) $first['value'],
+                    'unit' => $first['unit'] ?? null,
+                    'flag' => $this->normalizeFlag($first['flag'] ?? null),
+                ];
+
+                break;
+            }
+        }
+
+        return $values;
+    }
+
+    /**
+     * Find ready values for one order item by its sample number and the device
+     * mapped to that test. Read-only: nothing is saved or approved here.
+     *
+     * @return array{lab_order_item_id: int, device: array<string, mixed>|null, message: array<string, mixed>|null, values: array<int, array<string, mixed>>}|null
+     */
+    public function readyValuesForItem(LabOrderItem $item): ?array
+    {
+        $test = $item->test ?: LabTest::query()->findOrFail($item->lab_test_id);
+        $order = $item->order ?: LabOrder::query()->findOrFail($item->lab_order_id);
+
+        $item->setRelation('test', $test);
+        $item->setRelation('order', $order);
+
+        $deviceIds = $test->devices()
+            ->where('lab_devices.status', 'active')
+            ->pluck('lab_devices.id')
+            ->all();
+
+        if ($deviceIds === []) {
+            return null;
+        }
+
+        $orderNumber = (string) $order->order_number;
+        $mrn = $order->patient?->mrn;
+
+        $messages = LabDeviceMessage::query()
+            ->with('device:id,code,name,protocol,host,port,status')
+            ->whereIn('lab_device_id', $deviceIds)
+            ->where(function ($query) use ($orderNumber): void {
+                $query->where('parsed_summary', 'like', '%ORDER='.$orderNumber.'%')
+                    ->orWhere('raw_message', 'like', '%'.$orderNumber.'%');
+            })
+            ->orderByDesc('received_at')
+            ->limit(50)
+            ->get();
+
+        foreach ($messages as $message) {
+            $parsed = $this->parse($message->raw_message, $this->inferProtocol($message->raw_message));
+            $messageOrder = filled($parsed['order_number'] ?? null)
+                ? (string) $parsed['order_number']
+                : null;
+
+            if ($messageOrder !== null && $messageOrder !== $orderNumber) {
+                continue;
+            }
+
+            if ($messageOrder === null) {
+                if (! filled($mrn) || (string) ($parsed['patient_mrn'] ?? '') !== (string) $mrn) {
+                    continue;
+                }
+            }
+
+            $values = $this->valuesForItem($message, $item);
+
+            if ($values === []) {
+                continue;
+            }
+
+            return [
+                'lab_order_item_id' => (int) $item->id,
+                'device' => $message->device?->only(['id', 'code', 'name', 'protocol', 'host', 'port', 'status']),
+                'message' => [
+                    'id' => (int) $message->id,
+                    'status' => (string) $message->status,
+                    'received_at' => $message->received_at,
+                    'parsed_summary' => $message->parsed_summary,
+                ],
+                'values' => $values,
+            ];
+        }
+
+        return null;
+    }
+
+    /**
+     * Collect every ready result for one sample from each test's mapped device.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function readyValuesForOrder(LabOrder $order): array
+    {
+        $order->loadMissing(['items.test', 'patient']);
+
+        $results = [];
+
+        foreach ($order->items as $item) {
+            if ($item->sample_collected_at === null || $item->status === LabOrderItem::STATUS_APPROVED) {
+                continue;
+            }
+
+            $ready = $this->readyValuesForItem($item);
+
+            if ($ready !== null) {
+                $results[] = $ready;
+            }
+        }
+
+        return $results;
+    }
+
+    /** @param  array<string, mixed>  $testData */
+    private function messageTestMatchesItem(LabOrderItem $item, array $testData): bool
+    {
+        $code = filled($testData['code'] ?? null) ? (string) $testData['code'] : null;
+        $name = filled($testData['name'] ?? null) ? (string) $testData['name'] : null;
+
+        if (! $code && ! $name) {
+            return false;
+        }
+
+        if ($code && strcasecmp($code, (string) $item->test->code) === 0) {
+            return true;
+        }
+
+        return $name && (
+            strcasecmp($name, (string) $item->test->name_ar) === 0 ||
+            strcasecmp($name, (string) $item->test->name_en) === 0
+        );
+    }
+
     /** @return array<string, mixed> */
     private function parse(string $raw, ?string $protocol = null): array
     {

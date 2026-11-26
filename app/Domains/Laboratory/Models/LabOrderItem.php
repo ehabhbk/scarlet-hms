@@ -16,7 +16,8 @@ class LabOrderItem extends Model
     protected $fillable = [
         'lab_order_id', 'lab_test_id', 'status', 'result_value',
         'result_unit', 'flag', 'notes', 'entered_by', 'approved_by',
-        'entered_at', 'approved_at', 'sample_collected_at', 'sample_collected_by',
+        'entered_at', 'approved_at', 'printed_at', 'printed_by',
+        'sample_collected_at', 'sample_collected_by',
         'source', 'source_device_id', 'source_message_id', 'imported_at',
     ];
 
@@ -25,6 +26,7 @@ class LabOrderItem extends Model
         return [
             'entered_at' => 'datetime',
             'approved_at' => 'datetime',
+            'printed_at' => 'datetime',
             'sample_collected_at' => 'datetime',
             'imported_at' => 'datetime',
         ];
@@ -83,5 +85,10 @@ class LabOrderItem extends Model
     public function sourceMessage(): BelongsTo
     {
         return $this->belongsTo(LabDeviceMessage::class, 'source_message_id');
+    }
+
+    public function printedByUser(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'printed_by');
     }
 }

@@ -26,7 +26,12 @@ class DeviceConnectionTester
         );
 
         if ($socket === false) {
-            return ['ok' => false, 'message' => $error !== '' ? $error : 'تعذر الاتصال بالجهاز.'];
+            $reason = $error !== '' ? $error : 'لا يستجيب الجهاز';
+
+            return [
+                'ok' => false,
+                'message' => sprintf('تعذر الاتصال بالجهاز على %s:%d — %s', $host, $port, $reason),
+            ];
         }
 
         fclose($socket);

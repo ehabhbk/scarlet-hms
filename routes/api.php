@@ -358,6 +358,9 @@ Route::prefix('v1')->group(function () {
         Route::get('lab-orders', [LabOrderController::class, 'index'])
             ->middleware('permission:laboratory.view')
             ->name('api.lab-orders.index');
+        Route::get('lab-worklist', [LabOrderController::class, 'worklist'])
+            ->middleware('permission:laboratory.view')
+            ->name('api.lab-worklist');
         Route::post('lab-orders', [LabOrderController::class, 'store'])
             ->middleware('permission:laboratory.manage|settings.manage')
             ->name('api.lab-orders.store');
@@ -380,6 +383,12 @@ Route::prefix('v1')->group(function () {
         Route::post('lab-order-items/{item}/approve', [LabOrderController::class, 'approveResult'])
             ->middleware('permission:laboratory.approve')
             ->name('api.lab-order-items.approve');
+        Route::post('lab-order-items/{item}/unapprove', [LabOrderController::class, 'unapproveResult'])
+            ->middleware('permission:laboratory.approve')
+            ->name('api.lab-order-items.unapprove');
+        Route::post('lab-orders/{order}/print', [LabOrderController::class, 'printOrder'])
+            ->middleware('permission:laboratory.view')
+            ->name('api.lab-orders.print');
 
         /*
         |--------------------------------------------------------------------------
@@ -644,6 +653,18 @@ Route::prefix('v1')->group(function () {
         Route::get('lab-device-messages', [LabDeviceMessageController::class, 'index'])
             ->middleware('permission:laboratory.view')
             ->name('api.lab-device-messages.index');
+        Route::get('lab-device-messages/{message}', [LabDeviceMessageController::class, 'show'])
+            ->middleware('permission:laboratory.view')
+            ->name('api.lab-device-messages.show');
+        Route::get('lab-device-messages/{message}/values', [LabDeviceMessageController::class, 'values'])
+            ->middleware('permission:laboratory.view')
+            ->name('api.lab-device-messages.values');
+        Route::get('lab-order-items/{item}/device-values', [LabDeviceMessageController::class, 'itemValues'])
+            ->middleware('permission:laboratory.view')
+            ->name('api.lab-order-items.device-values');
+        Route::get('lab-orders/{order}/device-values', [LabDeviceMessageController::class, 'orderValues'])
+            ->middleware('permission:laboratory.view')
+            ->name('api.lab-orders.device-values');
         Route::post('lab-device-messages', [LabDeviceMessageController::class, 'store'])
             ->middleware('permission:laboratory.manage|settings.manage')
             ->name('api.lab-device-messages.store');

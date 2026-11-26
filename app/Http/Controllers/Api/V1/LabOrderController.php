@@ -2,10 +2,13 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Domains\Billing\Models\Invoice;
 use App\Domains\Identity\Models\User;
+use App\Domains\Insurance\Models\PatientInsurance;
 use App\Domains\Laboratory\Models\LabOrder;
 use App\Domains\Laboratory\Models\LabOrderItem;
 use App\Domains\Laboratory\Models\LabTest;
+use App\Domains\Settings\Models\Setting;
 use App\Http\Controllers\Controller;
 use App\Support\Http\ApiResponse;
 use App\Support\Sequences\SequenceService;
@@ -58,6 +61,132 @@ class LabOrderController extends Controller
         return ApiResponse::paginated($orders, $orders);
     }
 
+    /**
+     * Worklist for the result-entry workspace.
+     *
+     * Returns every order with collected samples, including approved and
+     * printed ones, so the UI can colour each ring by its true result state.
+     * The UI renders one ring per returned order, so no arbitrary limit is
+     * applied here.
+     */
+    /**
+     * One status for the whole sample ring.
+     * printed > approved > entered > empty.
+     */
+    private function worklistStatus(LabOrder $order): string
+    {
+        $items = $order->items;
+        if ($items->isEmpty()) {
+            return 'empty';
+        }
+
+        if ($items->every(fn (LabOrderItem $item) => $item->printed_at !== null)) {
+            return 'printed';
+        }
+
+        if ($items->every(fn (LabOrderItem $item) => $item->status === LabOrderItem::STATUS_APPROVED)) {
+            return 'approved';
+        }
+
+        if ($items->contains(fn (LabOrderItem $item) => $item->status === LabOrderItem::STATUS_ENTERED)) {
+            return 'entered';
+        }
+
+        return 'empty';
+    }
+
+    public function worklist(): JsonResponse
+    {
+        $orders = LabOrder::query()
+            ->with([
+                'patient:id,mrn,first_name_ar,last_name_ar,first_name_en,last_name_en,national_id,gender,date_of_birth,phone,address,status,registration_branch_id,created_at',
+                'patient.registrationBranch:id,code,name_ar,name_en',
+                'doctor:id,name',
+                'branch:id,name_ar,name_en',
+                'items' => fn ($q) => $q->whereNotNull('sample_collected_at')
+                    ->with([
+                        'test.parameters',
+                        'test.devices:id,code,name,protocol,host,port,status',
+                        'values.parameter',
+                        'sourceDevice:id,code,name,protocol,host,port',
+                        'enteredByUser:id,name',
+                        'approvedByUser:id,name',
+                        'printedByUser:id,name',
+                        'sampleCollectorUser:id,name',
+                        'sourceMessage:id,lab_device_id,status,parsed_summary,received_at',
+                    ]),
+            ])
+            ->whereHas('items', fn ($q) => $q->whereNotNull('sample_collected_at'))
+            ->orderBy('id')
+            ->get();
+
+        // Expose the device assigned to each test so the UI never asks the user
+        // to choose one; the mapping comes from the lab device settings.
+        $orders->each(function (LabOrder $order): void {
+            $order->items->each(function (LabOrderItem $item): void {
+                $item->setRelation(
+                    'assigned_device',
+                    $item->test->devices->firstWhere('status', 'active'),
+                );
+            });
+        });
+
+        $patientIds = $orders->pluck('patient_id')->unique()->all();
+
+        $invoices = Invoice::query()
+            ->whereIn('patient_id', $patientIds)
+            ->where('status', '!=', Invoice::STATUS_CANCELLED)
+            ->orderByDesc('id')
+            ->get()
+            ->groupBy('patient_id');
+
+        $policies = PatientInsurance::query()
+            ->with('provider:id,code,name,coverage_percent')
+            ->whereIn('patient_id', $patientIds)
+            ->where('status', 'active')
+            ->orderByDesc('id')
+            ->get()
+            ->groupBy('patient_id');
+
+        $rows = $orders->map(function (LabOrder $order) use ($invoices, $policies): array {
+            $invoice = $invoices->get($order->patient_id)?->first();
+            $policy = $policies->get($order->patient_id)?->first();
+
+            return [
+                'id' => $order->id,
+                'order_number' => $order->order_number,
+                'status' => $order->status,
+                'ordered_at' => $order->ordered_at,
+                'notes' => $order->notes,
+                'patient' => $order->patient,
+                'registration_branch' => $order->patient?->registrationBranch,
+                'doctor' => $order->doctor,
+                'branch' => $order->branch,
+                'tests_count' => $order->items->count(),
+                'result_status' => $this->worklistStatus($order),
+                'all_approved' => $order->items->isNotEmpty()
+                    && $order->items->every(fn (LabOrderItem $item) => $item->status === LabOrderItem::STATUS_APPROVED),
+                'payment' => $invoice ? [
+                    'invoice_number' => $invoice->invoice_number,
+                    'status' => $invoice->status,
+                    'total' => $invoice->total,
+                    'paid' => $invoice->paid,
+                    'balance' => $invoice->balance,
+                    'currency' => $invoice->currency,
+                ] : null,
+                'insurance' => $policy ? [
+                    'provider' => $policy->provider,
+                    'policy_number' => $policy->policy_number,
+                    'valid_to' => $policy->valid_to,
+                    'status' => $policy->status,
+                ] : null,
+                'items' => $order->items,
+            ];
+        });
+
+        return ApiResponse::success($rows, 'Lab worklist prepared.');
+    }
+
     public function store(Request $request): JsonResponse
     {
         $data = $request->validate([
@@ -72,7 +201,7 @@ class LabOrderController extends Controller
 
         $order = DB::transaction(function () use ($data, $request) {
             $order = LabOrder::create([
-                'order_number' => $this->sequences->next('lab_order', 'LAB', 6),
+                'order_number' => (string) $this->sequences->nextNumber('lab_order', '', 1),
                 'patient_id' => $data['patient_id'],
                 'encounter_id' => $data['encounter_id'] ?? null,
                 'branch_id' => $data['branch_id'],
@@ -192,10 +321,16 @@ class LabOrderController extends Controller
     {
         abort_if($item->status !== LabOrderItem::STATUS_ENTERED, 422, 'Only entered results can be approved.');
 
+        if (! (bool) Setting::get('lab_allow_empty_results', false)) {
+            abort_unless($this->itemHasResults($item), 422, 'لا يمكن اعتماد نتيجة تحتوي حقولاً فارغة.');
+        }
+
         $item->update([
             'status' => LabOrderItem::STATUS_APPROVED,
             'approved_by' => $request->user()->id,
             'approved_at' => now(),
+            'printed_at' => null,
+            'printed_by' => null,
         ]);
 
         $order = $item->order;
@@ -207,5 +342,74 @@ class LabOrderController extends Controller
         }
 
         return ApiResponse::success($item->fresh(['test', 'approvedBy']), 'Result approved.');
+    }
+
+    /**
+     * A supervisor can withdraw approval so the technician can correct a
+     * result. Withdrawal also clears the print marker.
+     */
+    public function unapproveResult(Request $request, LabOrderItem $item): JsonResponse
+    {
+        abort_if($item->status !== LabOrderItem::STATUS_APPROVED, 422, 'Only approved results can be unapproved.');
+
+        $item->update([
+            'status' => LabOrderItem::STATUS_ENTERED,
+            'approved_by' => null,
+            'approved_at' => null,
+            'printed_at' => null,
+            'printed_by' => null,
+        ]);
+
+        $order = $item->order;
+        if ($order->status === LabOrder::STATUS_COMPLETED) {
+            $order->update(['status' => LabOrder::STATUS_IN_PROGRESS, 'completed_at' => null]);
+        }
+
+        return ApiResponse::success($item->fresh(['test', 'values.parameter']), 'Approval withdrawn; result can be edited.');
+    }
+
+    /**
+     * Mark the whole sample as printed. Only fully approved orders can be
+     * printed; the actual report is rendered by the client from the full order.
+     */
+    public function printOrder(Request $request, LabOrder $order): JsonResponse
+    {
+        $order->loadMissing('items');
+
+        abort_if($order->items->isEmpty(), 422, 'لا توجد فحوصات في هذه العينة.');
+        abort_unless(
+            $order->items->every(fn (LabOrderItem $item) => $item->status === LabOrderItem::STATUS_APPROVED),
+            422,
+            'لا يمكن طباعة النتيجة إلا بعد إدخال جميع الفحوصات واعتمادها.',
+        );
+
+        $order->items->each(fn (LabOrderItem $item) => $item->update([
+            'printed_at' => now(),
+            'printed_by' => $request->user()->id,
+        ]));
+
+        return ApiResponse::success(
+            $order->fresh(['patient', 'doctor', 'branch', 'items.test.parameters', 'items.values.parameter', 'items.approvedByUser', 'items.enteredByUser']),
+            'تم تسجيل طباعة النتيجة كاملة.',
+        );
+    }
+
+    private function itemHasResults(LabOrderItem $item): bool
+    {
+        $item->loadMissing('test.parameters', 'values');
+
+        $parameters = $item->test->parameters;
+
+        if ($parameters->isEmpty()) {
+            return filled(trim((string) $item->result_value));
+        }
+
+        $values = $item->values->keyBy('lab_test_parameter_id');
+
+        return $parameters->every(function ($parameter) use ($values): bool {
+            $value = $values->get($parameter->id);
+
+            return $value !== null && filled(trim((string) $value->value));
+        });
     }
 }

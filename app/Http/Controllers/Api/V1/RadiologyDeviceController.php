@@ -114,6 +114,6 @@ class RadiologyDeviceController extends Controller
 
         return $result['ok']
             ? ApiResponse::success($result, $result['message'])
-            : ApiResponse::error($result['message'], $result, 422);
+            : ApiResponse::error($result['message'], $result, 422, 'device_unreachable');
     }
 }

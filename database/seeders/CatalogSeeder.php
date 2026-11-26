@@ -333,7 +333,7 @@ class CatalogSeeder extends Seeder
 
         foreach ($patients as $patient) {
             $order = LabOrder::query()->create([
-                'order_number' => $this->sequences->next('lab_order', 'LAB', 6),
+                'order_number' => (string) $this->sequences->nextNumber('lab_order', '', 1),
                 'patient_id' => $patient->id,
                 'branch_id' => $branch->id,
                 'doctor_id' => $doctor->id,

@@ -3,8 +3,11 @@
 namespace Tests\Feature;
 
 use App\Domains\Integration\Dicom\DicomDataset;
+use App\Domains\Integration\Services\DeviceConnectionTester;
 use App\Domains\Integration\Services\DeviceMessageIngestService;
 use App\Domains\Integration\Services\DicomStoreService;
+use App\Domains\Insurance\Models\InsuranceProvider;
+use App\Domains\Insurance\Models\PatientInsurance;
 use App\Domains\Laboratory\Models\LabDevice;
 use App\Domains\Laboratory\Models\LabDeviceMessage;
 use App\Domains\Laboratory\Models\LabOrder;
@@ -246,5 +249,210 @@ class DeviceIntegrationTest extends ApiTestCase
         $this->assertSame(RadiologyOrder::STATUS_RESULT_RECEIVED, $order->fresh()->status);
         $this->assertStringContainsString('No acute', (string) $order->fresh()->report);
         Storage::disk('local')->assertExists($result['stored_path']);
+    }
+
+    public function test_worklist_exposes_collected_orders_with_patient_and_insurance_markers(): void
+    {
+        $test = LabTest::query()->create([
+            'code' => 'CBC-WORKLIST',
+            'name_ar' => 'صورة دم كاملة',
+            'price' => 100,
+            'is_active' => true,
+        ]);
+        LabTestParameter::query()->create([
+            'lab_test_id' => $test->id,
+            'code' => 'HB',
+            'name_ar' => 'الهيموجلوبين',
+            'sort_order' => 1,
+        ]);
+        $patient = Patient::factory()->create();
+        $order = LabOrder::query()->create([
+            'order_number' => 'LAB-900010',
+            'patient_id' => $patient->id,
+            'branch_id' => $this->branch->id,
+            'status' => LabOrder::STATUS_ORDERED,
+            'ordered_at' => now(),
+        ]);
+        $order->items()->create([
+            'lab_test_id' => $test->id,
+            'status' => LabOrderItem::STATUS_PENDING,
+            'sample_collected_at' => now(),
+        ]);
+
+        $provider = InsuranceProvider::query()->create([
+            'code' => 'INS-TEST',
+            'name' => 'تأمين تجريبي',
+            'is_active' => true,
+        ]);
+        PatientInsurance::query()->create([
+            'patient_id' => $patient->id,
+            'insurance_provider_id' => $provider->id,
+            'policy_number' => 'POL-100',
+            'status' => 'active',
+        ]);
+
+        $this->actingAsRole('laboratory_technician');
+        $response = $this->getJson('/api/v1/lab-worklist?limit=6');
+
+        $response->assertOk()
+            ->assertJsonPath('data.0.order_number', 'LAB-900010')
+            ->assertJsonPath('data.0.patient.mrn', $patient->mrn)
+            ->assertJsonPath('data.0.tests_count', 1)
+            ->assertJsonPath('data.0.insurance.provider.name', 'تأمين تجريبي')
+            ->assertJsonPath('data.0.items.0.test.parameters.0.code', 'HB');
+    }
+
+    public function test_device_values_are_extracted_for_review_without_writing_results(): void
+    {
+        $test = LabTest::query()->create([
+            'code' => 'CBC-VALUES',
+            'name_ar' => 'صورة دم كاملة',
+            'price' => 100,
+            'is_active' => true,
+        ]);
+        $parameter = LabTestParameter::query()->create([
+            'lab_test_id' => $test->id,
+            'code' => 'HB',
+            'name_ar' => 'الهيموجلوبين',
+            'sort_order' => 1,
+        ]);
+        $patient = Patient::factory()->create();
+        $order = LabOrder::query()->create([
+            'order_number' => 'LAB-900011',
+            'patient_id' => $patient->id,
+            'branch_id' => $this->branch->id,
+            'status' => LabOrder::STATUS_ORDERED,
+            'ordered_at' => now(),
+        ]);
+        $item = $order->items()->create([
+            'lab_test_id' => $test->id,
+            'status' => LabOrderItem::STATUS_PENDING,
+            'sample_collected_at' => now(),
+        ]);
+        $device = LabDevice::query()->create([
+            'code' => 'CBC-VALUES-01',
+            'name' => 'محلل صورة الدم',
+            'protocol' => 'HL7',
+            'status' => 'active',
+        ]);
+        $message = LabDeviceMessage::query()->create([
+            'lab_device_id' => $device->id,
+            'raw_message' => implode("\r", [
+                'MSH|^~\\&|ANALYZER|CBC-VALUES-01|LIS|HMS|20261126140000||ORU^R01|MSG-VALUES|P|2.5',
+                'PID|1||'.$patient->mrn.'||Test^Patient',
+                'OBR|1|LAB-900011||CBC-VALUES^Complete Blood Count',
+                'OBX|1|NM|HB^Hemoglobin|1|14.1|g/dL|12.0 - 16.0|N|||F',
+            ]),
+            'status' => 'unmatched',
+            'received_at' => now(),
+        ]);
+
+        $this->actingAsRole('laboratory_technician');
+        $response = $this->getJson("/api/v1/lab-device-messages/{$message->id}/values?lab_order_item_id={$item->id}");
+
+        $response->assertOk()
+            ->assertJsonPath('data.0.parameter_id', $parameter->id)
+            ->assertJsonPath('data.0.code', 'HB')
+            ->assertJsonPath('data.0.value', '14.1');
+
+        $this->assertSame(LabOrderItem::STATUS_PENDING, $item->fresh()->status);
+        $this->assertDatabaseCount('lab_result_values', 0);
+    }
+
+    public function test_connection_failure_explains_which_device_endpoint_was_unreachable(): void
+    {
+        $result = app(DeviceConnectionTester::class)->test('127.0.0.1', 1);
+
+        $this->assertFalse($result['ok']);
+        $this->assertStringContainsString('127.0.0.1:1', $result['message']);
+        $this->assertStringContainsString('تعذر الاتصال بالجهاز', $result['message']);
+    }
+
+    public function test_ready_values_come_from_the_device_mapped_to_the_test_by_sample_number(): void
+    {
+        $test = LabTest::query()->create([
+            'code' => 'CBC-AUTO',
+            'name_ar' => 'صورة دم كاملة',
+            'name_en' => 'Complete Blood Count',
+            'price' => 100,
+            'is_active' => true,
+        ]);
+        LabTestParameter::query()->create([
+            'lab_test_id' => $test->id,
+            'code' => 'HB',
+            'name_ar' => 'الهيموجلوبين',
+            'name_en' => 'Hemoglobin',
+            'unit' => 'g/dL',
+            'sort_order' => 1,
+        ]);
+
+        $device = LabDevice::query()->create([
+            'code' => 'CBC-AUTO-DEVICE',
+            'name' => 'محلل صورة الدم المخصص',
+            'protocol' => 'HL7',
+            'status' => 'active',
+        ]);
+        $device->tests()->attach($test->id);
+
+        $unmappedDevice = LabDevice::query()->create([
+            'code' => 'OTHER-AUTO-DEVICE',
+            'name' => 'جهاز غير مرتبط بالفحص',
+            'protocol' => 'HL7',
+            'status' => 'active',
+        ]);
+
+        $patient = Patient::factory()->create();
+        $order = LabOrder::query()->create([
+            'order_number' => '200',
+            'patient_id' => $patient->id,
+            'branch_id' => $this->branch->id,
+            'status' => LabOrder::STATUS_ORDERED,
+            'ordered_at' => now(),
+        ]);
+        $item = $order->items()->create([
+            'lab_test_id' => $test->id,
+            'status' => LabOrderItem::STATUS_PENDING,
+            'sample_collected_at' => now(),
+        ]);
+
+        $raw = implode("\r", [
+            'MSH|^~\\&|CBC-AUTO-DEVICE|SCARLET|LIS|HMS|20261126130000||ORU^R01|MSG-AUTO-200|P|2.5',
+            'PID|1||'.$patient->mrn.'||Test^Patient',
+            'OBR|1|200||CBC-AUTO^Complete Blood Count|||20261126125500',
+            'OBX|1|NM|HB^Hemoglobin|1|14.2|g/dL|12.0 - 16.0|N|||F',
+        ]);
+
+        LabDeviceMessage::query()->create([
+            'lab_device_id' => $unmappedDevice->id,
+            'raw_message' => $raw,
+            'status' => 'received',
+            'parsed_summary' => 'ORDER=200 | CBC-AUTO(1)',
+            'received_at' => now()->subMinute(),
+        ]);
+
+        LabDeviceMessage::query()->create([
+            'lab_device_id' => $device->id,
+            'raw_message' => $raw,
+            'status' => 'received',
+            'parsed_summary' => 'ORDER=200 | CBC-AUTO(1)',
+            'received_at' => now(),
+        ]);
+
+        $this->actingAsRole('super_admin');
+
+        $this->getJson('/api/v1/lab-order-items/'.$item->id.'/device-values')
+            ->assertOk()
+            ->assertJsonPath('data.device.code', 'CBC-AUTO-DEVICE')
+            ->assertJsonPath('data.values.0.parameter_id', $test->parameters()->first()->id)
+            ->assertJsonPath('data.values.0.value', '14.2');
+
+        $this->getJson('/api/v1/lab-orders/'.$order->id.'/device-values')
+            ->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.lab_order_item_id', $item->id)
+            ->assertJsonPath('data.0.device.code', 'CBC-AUTO-DEVICE');
+
+        $this->assertSame(LabOrderItem::STATUS_PENDING, $item->fresh()->status);
+        $this->assertDatabaseCount('lab_result_values', 0);
     }
 }
