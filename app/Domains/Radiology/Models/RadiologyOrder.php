@@ -8,6 +8,7 @@ use App\Domains\Identity\Models\User;
 use App\Domains\Patients\Models\Patient;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class RadiologyOrder extends Model
 {
@@ -19,7 +20,8 @@ class RadiologyOrder extends Model
     protected $fillable = [
         'order_number', 'patient_id', 'encounter_id', 'branch_id',
         'doctor_id', 'modality', 'study_description', 'status',
-        'ordered_at', 'completed_at', 'report', 'reported_by',
+        'ordered_at', 'completed_at', 'printed_at', 'printed_by',
+        'report', 'reported_by',
         'source', 'source_device_id', 'source_message_id',
         'radiology_study_id', 'result_received_at',
     ];
@@ -29,6 +31,7 @@ class RadiologyOrder extends Model
         return [
             'ordered_at' => 'datetime',
             'completed_at' => 'datetime',
+            'printed_at' => 'datetime',
             'result_received_at' => 'datetime',
         ];
     }
@@ -71,5 +74,15 @@ class RadiologyOrder extends Model
     public function sourceMessage(): BelongsTo
     {
         return $this->belongsTo(RadiologyDeviceMessage::class, 'source_message_id');
+    }
+
+    public function printer(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'printed_by');
+    }
+
+    public function images(): HasMany
+    {
+        return $this->hasMany(RadiologyImage::class);
     }
 }

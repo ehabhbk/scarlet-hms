@@ -6,6 +6,7 @@ use App\Http\Controllers\Api\V1\AttendanceController;
 use App\Http\Controllers\Api\V1\PayrollController;
 use App\Http\Controllers\Api\V1\AuditLogController;
 use App\Http\Controllers\Api\V1\AuthController;
+use App\Http\Controllers\Api\V1\ClinicalDeviceController;
 use App\Http\Controllers\Api\V1\DeviceIngestController;
 use App\Http\Controllers\Api\V1\DashboardController;
 use App\Http\Controllers\Api\V1\AdmissionController;
@@ -61,6 +62,8 @@ Route::prefix('v1')->group(function () {
         ->name('api.device-ingest.lab');
     Route::post('device-ingest/radiology', [DeviceIngestController::class, 'radiology'])
         ->name('api.device-ingest.radiology');
+    Route::post('device-ingest/clinical', [DeviceIngestController::class, 'clinical'])
+        ->name('api.device-ingest.clinical');
 
     /*
     |--------------------------------------------------------------------------
@@ -361,6 +364,9 @@ Route::prefix('v1')->group(function () {
         Route::get('lab-worklist', [LabOrderController::class, 'worklist'])
             ->middleware('permission:laboratory.view')
             ->name('api.lab-worklist');
+        Route::get('lab-collection-worklist', [LabOrderController::class, 'collectionWorklist'])
+            ->middleware('permission:laboratory.view')
+            ->name('api.lab-collection-worklist');
         Route::post('lab-orders', [LabOrderController::class, 'store'])
             ->middleware('permission:laboratory.manage|settings.manage')
             ->name('api.lab-orders.store');
@@ -374,6 +380,9 @@ Route::prefix('v1')->group(function () {
         Route::post('lab-order-items/{item}/collect', [LabOrderController::class, 'collectSample'])
             ->middleware('permission:laboratory.manage|settings.manage')
             ->name('api.lab-order-items.collect');
+        Route::post('lab-orders/{order}/collect', [LabOrderController::class, 'collectOrderSamples'])
+            ->middleware('permission:laboratory.manage|settings.manage')
+            ->name('api.lab-orders.collect');
         Route::post('lab-order-items/{item}/result', [LabOrderController::class, 'enterResult'])
             ->middleware('permission:laboratory.manage|settings.manage')
             ->name('api.lab-order-items.result');
@@ -395,6 +404,9 @@ Route::prefix('v1')->group(function () {
         | Radiology
         |--------------------------------------------------------------------------
         */
+        Route::get('radiology-worklist', [RadiologyOrderController::class, 'worklist'])
+            ->middleware('permission:radiology.view|settings.manage')
+            ->name('api.radiology-worklist');
         Route::get('radiology-orders', [RadiologyOrderController::class, 'index'])
             ->middleware('permission:radiology.view|settings.manage')
             ->name('api.radiology-orders.index');
@@ -404,9 +416,27 @@ Route::prefix('v1')->group(function () {
         Route::get('radiology-orders/{order}', [RadiologyOrderController::class, 'show'])
             ->middleware('permission:radiology.view|settings.manage')
             ->name('api.radiology-orders.show');
+        Route::get('radiology-orders/{order}/devices', [RadiologyOrderController::class, 'devices'])
+            ->middleware('permission:radiology.view|settings.manage')
+            ->name('api.radiology-orders.devices');
+        Route::get('radiology-orders/{order}/device-data', [RadiologyOrderController::class, 'deviceData'])
+            ->middleware('permission:radiology.view|settings.manage')
+            ->name('api.radiology-orders.device-data');
+        Route::post('radiology-orders/{order}/fetch-devices', [RadiologyOrderController::class, 'fetchDevices'])
+            ->middleware('permission:radiology.manage|settings.manage')
+            ->name('api.radiology-orders.fetch-devices');
         Route::post('radiology-orders/{order}/report', [RadiologyOrderController::class, 'report'])
             ->middleware('permission:radiology.manage|settings.manage')
             ->name('api.radiology-orders.report');
+        Route::post('radiology-orders/{order}/reopen', [RadiologyOrderController::class, 'reopen'])
+            ->middleware('permission:radiology.manage|settings.manage')
+            ->name('api.radiology-orders.reopen');
+        Route::post('radiology-orders/{order}/print', [RadiologyOrderController::class, 'printOrder'])
+            ->middleware('permission:radiology.view|settings.manage')
+            ->name('api.radiology-orders.print');
+        Route::get('radiology-images/{image}/download', [RadiologyOrderController::class, 'downloadImage'])
+            ->middleware('permission:radiology.view|settings.manage')
+            ->name('api.radiology-images.download');
         Route::post('radiology-orders/{order}/confirm-result', [RadiologyOrderController::class, 'confirmResult'])
             ->middleware('permission:radiology.manage|settings.manage')
             ->name('api.radiology-orders.confirm-result');
@@ -532,6 +562,9 @@ Route::prefix('v1')->group(function () {
         Route::post('lab-devices/{device}/test-connection', [LabDeviceController::class, 'testConnection'])
             ->middleware('permission:laboratory.manage|settings.manage')
             ->name('api.lab-devices.test-connection');
+        Route::post('lab-devices/{device}/poll', [LabDeviceController::class, 'pollNow'])
+            ->middleware('permission:laboratory.manage|settings.manage')
+            ->name('api.lab-devices.poll');
         Route::get('lab-devices/{device}', [LabDeviceController::class, 'show'])
             ->middleware('permission:laboratory.view')
             ->name('api.lab-devices.show');
@@ -556,6 +589,9 @@ Route::prefix('v1')->group(function () {
         Route::post('radiology-devices/{device}/test-connection', [RadiologyDeviceController::class, 'testConnection'])
             ->middleware('permission:radiology.manage|settings.manage')
             ->name('api.radiology-devices.test-connection');
+        Route::post('radiology-devices/{device}/poll', [RadiologyDeviceController::class, 'pollNow'])
+            ->middleware('permission:radiology.manage|settings.manage')
+            ->name('api.radiology-devices.poll');
         Route::get('radiology-devices/{device}', [RadiologyDeviceController::class, 'show'])
             ->middleware('permission:radiology.view|settings.manage')
             ->name('api.radiology-devices.show');
@@ -568,6 +604,39 @@ Route::prefix('v1')->group(function () {
         Route::get('radiology-devices/{device}/messages', [RadiologyDeviceMessageController::class, 'index'])
             ->middleware('permission:radiology.view|settings.manage')
             ->name('api.radiology-devices.messages');
+
+        /*
+        |--------------------------------------------------------------------------
+        | Universal gateway -- bedside devices (emergency / OR / ICU / wards)
+        |--------------------------------------------------------------------------
+        */
+        Route::get('clinical-devices', [ClinicalDeviceController::class, 'index'])
+            ->middleware('permission:settings.manage')
+            ->name('api.clinical-devices.index');
+        Route::post('clinical-devices', [ClinicalDeviceController::class, 'store'])
+            ->middleware('permission:settings.manage')
+            ->name('api.clinical-devices.store');
+        Route::get('clinical-devices/{device}', [ClinicalDeviceController::class, 'show'])
+            ->middleware('permission:settings.manage')
+            ->name('api.clinical-devices.show');
+        Route::match(['put', 'patch'], 'clinical-devices/{device}', [ClinicalDeviceController::class, 'update'])
+            ->middleware('permission:settings.manage')
+            ->name('api.clinical-devices.update');
+        Route::delete('clinical-devices/{device}', [ClinicalDeviceController::class, 'destroy'])
+            ->middleware('permission:settings.manage')
+            ->name('api.clinical-devices.destroy');
+        Route::post('clinical-devices/{device}/test-connection', [ClinicalDeviceController::class, 'testConnection'])
+            ->middleware('permission:settings.manage')
+            ->name('api.clinical-devices.test-connection');
+        Route::post('clinical-devices/{device}/poll', [ClinicalDeviceController::class, 'pollNow'])
+            ->middleware('permission:settings.manage')
+            ->name('api.clinical-devices.poll');
+        Route::get('clinical-devices/{device}/messages', [ClinicalDeviceController::class, 'messages'])
+            ->middleware('permission:settings.manage')
+            ->name('api.clinical-devices.messages');
+        Route::get('clinical-devices/{device}/logs', [ClinicalDeviceController::class, 'logs'])
+            ->middleware('permission:settings.manage')
+            ->name('api.clinical-devices.logs');
 
         /*
         |--------------------------------------------------------------------------

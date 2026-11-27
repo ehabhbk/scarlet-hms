@@ -1,0 +1,19 @@
+[Unit]
+Description=Scarlet HMS active device poller
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/scarlet-hms
+ExecStart=/usr/bin/php /var/www/scarlet-hms/artisan devices:poll --daemon
+Restart=always
+RestartSec=5
+TimeoutStopSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Domains\Integration\Parsers\Hl7Parser;
+use App\Domains\Integration\Services\DeviceFrameExtractor;
 use App\Domains\Integration\Services\DeviceMessageIngestService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
@@ -18,7 +19,7 @@ class ListenDeviceMessages extends Command
         {--radiology-port= : Radiology/ultrasound HL7/ASTM TCP port, set 0 to disable}
         {--quiet-acks : Do not write ACK frames back to devices}';
 
-    protected $description = 'Listen for HL7/ASTM results from lab and radiology devices and import them automatically';
+    protected $description = 'Listen for HL7/ASTM/FHIR/JSON/XML device results and store them for human review';
 
     private readonly DeviceMessageIngestService $ingest;
 
@@ -170,76 +171,7 @@ class ListenDeviceMessages extends Command
     /** @return array<int, string> */
     private function extractMessages(string &$buffer, string $kind): array
     {
-        $messages = [];
-        $buffer = ltrim($buffer, "\r\n");
-
-        while ($buffer !== '') {
-            $mllpStart = strpos($buffer, "\x0B");
-
-            if ($mllpStart !== false) {
-                if ($mllpStart > 0) {
-                    Log::warning('Discarding bytes before MLLP frame', ['bytes' => bin2hex(substr($buffer, 0, $mllpStart))]);
-                    $buffer = substr($buffer, $mllpStart);
-
-                    continue;
-                }
-
-                $end = strpos($buffer, "\x1C", 1);
-                if ($end === false) {
-                    return $messages;
-                }
-
-                $frame = substr($buffer, 1, $end - 1);
-                $buffer = substr($buffer, $end + 1);
-                $frame = str_replace("\x1C", '', $frame);
-
-                if (trim($frame) !== '') {
-                    $messages[] = $frame;
-                }
-
-                continue;
-            }
-
-            $stx = strpos($buffer, "\x02");
-            if ($stx !== false) {
-                if ($stx > 0) {
-                    $buffer = substr($buffer, $stx);
-
-                    continue;
-                }
-
-                $endChar = strpbrk($buffer, "\x03\x17");
-                if ($endChar === false) {
-                    return $messages;
-                }
-
-                $end = strpos($buffer, $endChar[0]);
-                $frame = substr($buffer, 0, $end + 1);
-                $buffer = substr($buffer, $end + 1);
-
-                if (trim($frame, "\x02\x03\x17\r\n") !== '') {
-                    $messages[] = $frame;
-                }
-
-                continue;
-            }
-
-            if ($kind === 'radiology' && preg_match('/(?:^|[\r\n])L\|[^\r\n]*\r?\n?/', $buffer)) {
-                $messages[] = $buffer;
-                $buffer = '';
-
-                continue;
-            }
-
-            if ($kind === 'lab' && str_contains($buffer, 'MSH|') && str_ends_with($buffer, "\r")) {
-                $messages[] = $buffer;
-                $buffer = '';
-            }
-
-            return $messages;
-        }
-
-        return $messages;
+        return (new DeviceFrameExtractor())->extract($buffer);
     }
 
     /**

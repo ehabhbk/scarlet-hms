@@ -187,6 +187,94 @@ class LabOrderController extends Controller
         return ApiResponse::success($rows, 'Lab worklist prepared.');
     }
 
+    /**
+     * Collection worklist: one ring per real, non-cancelled lab order.
+     *
+     * Unlike the result worklist this includes orders whose samples have not
+     * been collected yet, so the collector sees the full dynamic queue.
+     */
+    public function collectionWorklist(): JsonResponse
+    {
+        $orders = LabOrder::query()
+            ->with([
+                'patient:id,mrn,first_name_ar,last_name_ar,first_name_en,last_name_en,national_id,gender,date_of_birth,phone,address,status,registration_branch_id,created_at',
+                'patient.registrationBranch:id,code,name_ar,name_en',
+                'doctor:id,name',
+                'branch:id,name_ar,name_en',
+                'items' => fn ($q) => $q->with([
+                    'test:id,code,name_ar,name_en,price,unit,is_active',
+                    'sampleCollectorUser:id,name',
+                ]),
+            ])
+            ->where('status', '!=', LabOrder::STATUS_CANCELLED)
+            ->orderBy('id')
+            ->get();
+
+        $patientIds = $orders->pluck('patient_id')->unique()->all();
+
+        $invoices = Invoice::query()
+            ->whereIn('patient_id', $patientIds)
+            ->where('status', '!=', Invoice::STATUS_CANCELLED)
+            ->orderByDesc('id')
+            ->get()
+            ->groupBy('patient_id');
+
+        $policies = PatientInsurance::query()
+            ->with('provider:id,code,name,coverage_percent')
+            ->whereIn('patient_id', $patientIds)
+            ->where('status', 'active')
+            ->orderByDesc('id')
+            ->get()
+            ->groupBy('patient_id');
+
+        $rows = $orders->map(function (LabOrder $order) use ($invoices, $policies): array {
+            $invoice = $invoices->get($order->patient_id)?->first();
+            $policy = $policies->get($order->patient_id)?->first();
+            $collected = $order->items->filter(fn (LabOrderItem $item) => $item->sample_collected_at !== null);
+            $pending = $order->items->count() - $collected->count();
+
+            $collectionStatus = match (true) {
+                $order->items->isEmpty() || $pending === $order->items->count() => 'pending',
+                $pending === 0 => 'collected',
+                default => 'partial',
+            };
+
+            return [
+                'id' => $order->id,
+                'order_number' => $order->order_number,
+                'status' => $order->status,
+                'ordered_at' => $order->ordered_at,
+                'notes' => $order->notes,
+                'patient' => $order->patient,
+                'registration_branch' => $order->patient?->registrationBranch,
+                'doctor' => $order->doctor,
+                'branch' => $order->branch,
+                'tests_count' => $order->items->count(),
+                'collected_count' => $collected->count(),
+                'pending_count' => $pending,
+                'collection_status' => $collectionStatus,
+                'first_collected_at' => $collected->min('sample_collected_at'),
+                'payment' => $invoice ? [
+                    'invoice_number' => $invoice->invoice_number,
+                    'status' => $invoice->status,
+                    'total' => $invoice->total,
+                    'paid' => $invoice->paid,
+                    'balance' => $invoice->balance,
+                    'currency' => $invoice->currency,
+                ] : null,
+                'insurance' => $policy ? [
+                    'provider' => $policy->provider,
+                    'policy_number' => $policy->policy_number,
+                    'valid_to' => $policy->valid_to,
+                    'status' => $policy->status,
+                ] : null,
+                'items' => $order->items,
+            ];
+        });
+
+        return ApiResponse::success($rows, 'Sample collection worklist prepared.');
+    }
+
     public function store(Request $request): JsonResponse
     {
         $data = $request->validate([
@@ -240,13 +328,56 @@ class LabOrderController extends Controller
         $this->assertCanCollect($request->user());
         abort_if($item->sample_collected_at !== null, 422, 'Sample has already been collected.');
 
-        $item->update([
-            'sample_collected_at' => now(),
-            'sample_collected_by' => $request->user()->id,
-            'status' => LabOrderItem::STATUS_PENDING,
-        ]);
+        $collectedAt = now();
+
+        DB::transaction(function () use ($item, $request, $collectedAt): void {
+            $item->update([
+                'sample_collected_at' => $collectedAt,
+                'sample_collected_by' => $request->user()->id,
+                'status' => LabOrderItem::STATUS_PENDING,
+            ]);
+
+            $this->markOrderInProgress($item->order);
+        });
 
         return ApiResponse::success($item->fresh(['test', 'order']), 'Sample collected.');
+    }
+
+    public function collectOrderSamples(Request $request, LabOrder $order): JsonResponse
+    {
+        $this->assertCanCollect($request->user());
+        abort_if($order->status === LabOrder::STATUS_CANCELLED, 422, 'Cancelled orders cannot be collected.');
+
+        $items = $order->items()->whereNull('sample_collected_at')->get();
+        abort_if($items->isEmpty(), 422, 'All samples for this order have already been collected.');
+
+        $collectedAt = now();
+        $userId = $request->user()->id;
+
+        DB::transaction(function () use ($items, $order, $collectedAt, $userId): void {
+            foreach ($items as $item) {
+                $item->update([
+                    'sample_collected_at' => $collectedAt,
+                    'sample_collected_by' => $userId,
+                    'status' => LabOrderItem::STATUS_PENDING,
+                ]);
+            }
+
+            $this->markOrderInProgress($order);
+        });
+
+        return ApiResponse::success([
+            'order_id' => $order->id,
+            'order_number' => $order->order_number,
+            'collected_count' => $items->count(),
+        ], 'Samples collected.');
+    }
+
+    private function markOrderInProgress(LabOrder $order): void
+    {
+        if ($order->status === LabOrder::STATUS_ORDERED) {
+            $order->update(['status' => LabOrder::STATUS_IN_PROGRESS]);
+        }
     }
 
     public function enterResult(Request $request, LabOrderItem $item): JsonResponse

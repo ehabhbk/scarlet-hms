@@ -249,6 +249,12 @@ class DeviceIntegrationTest extends ApiTestCase
         $this->assertSame(RadiologyOrder::STATUS_RESULT_RECEIVED, $order->fresh()->status);
         $this->assertStringContainsString('No acute', (string) $order->fresh()->report);
         Storage::disk('local')->assertExists($result['stored_path']);
+        $this->assertDatabaseHas('radiology_images', [
+            'radiology_order_id' => $order->id,
+            'radiology_device_id' => RadiologyDevice::query()->where('code', 'XR-DICOM')->value('id'),
+            'path' => $result['stored_path'],
+            'modality' => 'XR',
+        ]);
     }
 
     public function test_worklist_exposes_collected_orders_with_patient_and_insurance_markers(): void

@@ -18,7 +18,15 @@ class RadiologyDeviceMessageController extends Controller
         $query = RadiologyDeviceMessage::query()
             ->with('device:id,code,name')
             ->when($request->integer('radiology_device_id'), fn ($q, $id) => $q->where('radiology_device_id', $id))
-            ->when($request->string('status')->toString(), fn ($q, $status) => $q->where('status', $status));
+            ->when($request->string('status')->toString(), fn ($q, $status) => $q->where('status', $status))
+            ->when($request->string('search')->toString(), function ($q, string $search): void {
+                $escaped = addcslashes($search, '%_\\');
+                $q->where(function ($inner) use ($escaped): void {
+                    $inner->where('raw_message', 'like', "%{$escaped}%")
+                        ->orWhere('parsed_summary', 'like', "%{$escaped}%")
+                        ->orWhere('message_id', 'like', "%{$escaped}%");
+                });
+            });
 
         $messages = $query->orderByDesc('received_at')
             ->paginate(min(max($request->integer('per_page', 25), 5), 100));

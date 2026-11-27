@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Domains\Integration\Services\DeviceConnectionTester;
+use App\Domains\Integration\Services\DevicePollerService;
 use App\Domains\Radiology\Models\RadiologyDevice;
 use App\Http\Controllers\Controller;
 use App\Support\Http\ApiResponse;
@@ -34,6 +35,11 @@ class RadiologyDeviceController extends Controller
             'port' => ['nullable', 'integer', 'min:1', 'max:65535'],
             'modality' => ['nullable', 'string', 'max:40'],
             'status' => ['nullable', 'string', 'max:20'],
+            'direction' => ['nullable', 'string', 'in:push,pull,bidirectional'],
+            'poll_enabled' => ['nullable', 'boolean'],
+            'poll_interval_seconds' => ['nullable', 'integer', 'min:5', 'max:86400'],
+            'poll_query' => ['nullable', 'string', 'max:500'],
+            'poll_query_encoding' => ['nullable', 'string', 'in:literal,hex,base64'],
             'study_ids' => ['nullable', 'array'],
             'study_ids.*' => ['integer', 'exists:radiology_studies,id'],
         ]);
@@ -49,6 +55,11 @@ class RadiologyDeviceController extends Controller
             'port' => $data['port'] ?? null,
             'modality' => $data['modality'] ?? null,
             'status' => $data['status'] ?? 'active',
+            'direction' => $data['direction'] ?? 'push',
+            'poll_enabled' => $data['poll_enabled'] ?? false,
+            'poll_interval_seconds' => $data['poll_interval_seconds'] ?? 30,
+            'poll_query' => $data['poll_query'] ?? null,
+            'poll_query_encoding' => $data['poll_query_encoding'] ?? 'literal',
         ]);
 
         if (! empty($data['study_ids'])) {
@@ -76,6 +87,11 @@ class RadiologyDeviceController extends Controller
             'port' => ['nullable', 'integer', 'min:1', 'max:65535'],
             'modality' => ['nullable', 'string', 'max:40'],
             'status' => ['nullable', 'string', 'max:20'],
+            'direction' => ['nullable', 'string', 'in:push,pull,bidirectional'],
+            'poll_enabled' => ['nullable', 'boolean'],
+            'poll_interval_seconds' => ['nullable', 'integer', 'min:5', 'max:86400'],
+            'poll_query' => ['nullable', 'string', 'max:500'],
+            'poll_query_encoding' => ['nullable', 'string', 'in:literal,hex,base64'],
             'study_ids' => ['nullable', 'array'],
             'study_ids.*' => ['integer', 'exists:radiology_studies,id'],
         ]);
@@ -91,6 +107,11 @@ class RadiologyDeviceController extends Controller
             'port' => array_key_exists('port', $data) ? $data['port'] : $device->port,
             'modality' => array_key_exists('modality', $data) ? $data['modality'] : $device->modality,
             'status' => $data['status'] ?? $device->status,
+            'direction' => $data['direction'] ?? $device->direction,
+            'poll_enabled' => array_key_exists('poll_enabled', $data) ? $data['poll_enabled'] : $device->poll_enabled,
+            'poll_interval_seconds' => $data['poll_interval_seconds'] ?? $device->poll_interval_seconds,
+            'poll_query' => array_key_exists('poll_query', $data) ? $data['poll_query'] : $device->poll_query,
+            'poll_query_encoding' => $data['poll_query_encoding'] ?? $device->poll_query_encoding,
         ]);
 
         if (array_key_exists('study_ids', $data)) {
@@ -115,5 +136,20 @@ class RadiologyDeviceController extends Controller
         return $result['ok']
             ? ApiResponse::success($result, $result['message'])
             : ApiResponse::error($result['message'], $result, 422, 'device_unreachable');
+    }
+
+    public function pollNow(Request $request, RadiologyDevice $device, DevicePollerService $poller): JsonResponse
+    {
+        $context = $request->validate([
+            'order_number' => ['nullable', 'string', 'max:80'],
+            'study_code' => ['nullable', 'string', 'max:80'],
+            'patient_mrn' => ['nullable', 'string', 'max:80'],
+        ]);
+
+        $result = $poller->poll($device, 'radiology', $context);
+
+        return $result['ok']
+            ? ApiResponse::success($result, 'تم استجواب الجهاز واستيراد الردود للمراجعة.')
+            : ApiResponse::error($result['error'] ?? 'تعذر استجواب الجهاز.', $result, 422, 'device_poll_failed');
     }
 }

@@ -2,8 +2,11 @@
 
 namespace App\Domains\Integration\Services;
 
+use App\Domains\Integration\Models\ClinicalDevice;
+use App\Domains\Integration\Models\ClinicalDeviceMessage;
 use App\Domains\Integration\Parsers\AstmParser;
 use App\Domains\Integration\Parsers\Hl7Parser;
+use App\Domains\Integration\Parsers\UniversalParser;
 use App\Domains\Laboratory\Models\LabDevice;
 use App\Domains\Laboratory\Models\LabDeviceMessage;
 use App\Domains\Laboratory\Models\LabOrder;
@@ -27,10 +30,13 @@ class DeviceMessageIngestService
 
     private readonly AstmParser $astm;
 
+    private readonly UniversalParser $universal;
+
     public function __construct()
     {
         $this->hl7 = new Hl7Parser();
         $this->astm = new AstmParser();
+        $this->universal = new UniversalParser();
     }
 
     /**
@@ -110,6 +116,86 @@ class DeviceMessageIngestService
         return $message->fresh(['device']);
     }
 
+    /**
+     * Store any bedside / emergency / operating-room / ICU / ward device feed.
+     * Clinical feeds are recorded for the patient timeline only; they never
+     * become approved laboratory or radiology results.
+     *
+     * @param  array<string, mixed>  $context  device_id, device_code, protocol, remote_host, category
+     */
+    public function ingestClinical(string $raw, array $context = []): ClinicalDeviceMessage
+    {
+        $parsed = $this->parse($raw, $context['protocol'] ?? null);
+        $device = $this->resolveClinicalDevice($parsed, $context);
+        $mrn = filled($parsed['patient_mrn'] ?? null) ? (string) $parsed['patient_mrn'] : null;
+        $patient = $mrn ? Patient::query()->where('mrn', $mrn)->first() : null;
+
+        $message = ClinicalDeviceMessage::create([
+            'clinical_device_id' => $device->id,
+            'patient_id' => $patient?->id,
+            'protocol' => $parsed['protocol'] ?? $this->inferProtocol($raw),
+            'message_id' => $parsed['message_id'] ?? null,
+            'patient_mrn' => $mrn,
+            'reference' => $parsed['order_number'] ?? null,
+            'raw_message' => $raw,
+            'canonical_json' => $parsed,
+            'parsed_summary' => $this->summarize($parsed).($patient ? ' | patient=linked' : ' | patient=unmatched'),
+            'status' => 'received',
+            'received_at' => now(),
+        ]);
+
+        $device->update([
+            'protocol_detected' => $message->protocol,
+            'last_poll_at' => now(),
+        ]);
+
+        return $message;
+    }
+
+    /** @param  array<string, mixed>  $parsed  @param  array<string, mixed>  $context */
+    private function resolveClinicalDevice(array $parsed, array $context): ClinicalDevice
+    {
+        $query = ClinicalDevice::query();
+
+        if (! empty($context['device_id'])) {
+            $query->where('id', $context['device_id']);
+        } elseif (! empty($context['device_code'])) {
+            $query->where('code', $context['device_code']);
+        } elseif (! empty($context['remote_host'])) {
+            $query->where('host', $context['remote_host']);
+            if (! empty($context['remote_port'])) {
+                $query->orWhere('port', $context['remote_port']);
+            }
+        } elseif (filled($parsed['sending_application'] ?? null)) {
+            $query->where('code', $parsed['sending_application'])
+                ->orWhere('name', $parsed['sending_application']);
+        }
+
+        $device = $query->first();
+        if ($device) {
+            return $device;
+        }
+
+        $code = 'AUTO-'.Str::upper(Str::random(8));
+        while (ClinicalDevice::query()->where('code', $code)->exists()) {
+            $code = 'AUTO-'.Str::upper(Str::random(8));
+        }
+
+        return ClinicalDevice::query()->create([
+            'code' => $code,
+            'name' => 'جهاز سريري غير معرّف',
+            'category' => in_array($context['category'] ?? null, ['emergency', 'operating_room', 'icu', 'ward', 'other'], true)
+                ? $context['category']
+                : 'other',
+            'protocol' => $parsed['protocol'] ?? 'AUTO',
+            'host' => $context['remote_host'] ?? null,
+            'port' => $context['remote_port'] ?? null,
+            'direction' => 'push',
+            'status' => 'active',
+            'protocol_detected' => $parsed['protocol'] ?? null,
+        ]);
+    }
+
     public function reprocessLabMessage(LabDeviceMessage $message): LabDeviceMessage
     {
         $parsed = $this->parse($message->raw_message, $this->inferProtocol($message->raw_message));
@@ -164,7 +250,7 @@ class DeviceMessageIngestService
 
     private function inferProtocol(string $raw): string
     {
-        return str_contains($raw, 'MSH|') ? 'HL7' : 'ASTM';
+        return $this->universal->detect($raw);
     }
 
     /**
@@ -358,15 +444,19 @@ class DeviceMessageIngestService
     {
         $protocol = strtoupper(trim((string) $protocol));
 
-        if ($protocol === '') {
-            $protocol = str_contains($raw, 'MSH|') ? 'HL7' : 'ASTM';
+        if ($protocol === '' || $protocol === 'AUTO') {
+            return $this->universal->parse($raw);
         }
 
         if (str_starts_with($protocol, 'HL7') || str_starts_with($protocol, 'LIS')) {
             return $this->hl7->parse($raw);
         }
 
-        return $this->astm->parse($raw);
+        if (str_starts_with($protocol, 'ASTM')) {
+            return $this->astm->parse($raw);
+        }
+
+        return $this->universal->parse($raw, $protocol);
     }
 
     /**

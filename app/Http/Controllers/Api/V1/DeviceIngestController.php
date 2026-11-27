@@ -66,6 +66,38 @@ class DeviceIngestController extends Controller
         ], 'Radiology device message processed.');
     }
 
+    public function clinical(Request $request): JsonResponse
+    {
+        if (! $this->authorized($request)) {
+            return ApiResponse::error('Invalid device token.', null, 401, 'invalid_device_token');
+        }
+
+        $data = $request->validate([
+            'raw_message' => ['required', 'string'],
+            'clinical_device_id' => ['nullable', 'integer', 'exists:clinical_devices,id'],
+            'device_code' => ['nullable', 'string', 'max:40'],
+            'category' => ['nullable', 'string', 'in:emergency,operating_room,icu,ward,other'],
+            'protocol' => ['nullable', 'string', 'max:40'],
+        ]);
+
+        $message = $this->ingest->ingestClinical($data['raw_message'], [
+            'device_id' => $data['clinical_device_id'] ?? null,
+            'device_code' => $data['device_code'] ?? null,
+            'category' => $data['category'] ?? null,
+            'protocol' => $data['protocol'] ?? null,
+            'remote_host' => $request->ip(),
+        ]);
+
+        return ApiResponse::success([
+            'id' => $message->id,
+            'status' => $message->status,
+            'protocol' => $message->protocol,
+            'device' => $message->device,
+            'patient_id' => $message->patient_id,
+            'parsed_summary' => $message->parsed_summary,
+        ], 'Clinical device message stored.');
+    }
+
     private function authorized(Request $request): bool
     {
         $expected = (string) config('devices.ingest_token', '');

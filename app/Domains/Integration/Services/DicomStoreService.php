@@ -3,6 +3,9 @@
 namespace App\Domains\Integration\Services;
 
 use App\Domains\Integration\Dicom\DicomDataset;
+use App\Domains\Radiology\Models\RadiologyDeviceMessage;
+use App\Domains\Radiology\Models\RadiologyImage;
+use App\Domains\Radiology\Models\RadiologyOrder;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use RuntimeException;
@@ -147,10 +150,18 @@ class DicomStoreService
 
         $path = $this->storeFile($datasetBytes, $sopUid);
         $hl7 = $this->buildHl7($elements, $callingAe, $report, $sopUid);
-        $message = $this->ingest->ingestRadiology($hl7, [
-            'device_code' => $callingAe,
-            'protocol' => 'HL7',
-        ]);
+
+        $message = null;
+        try {
+            $message = $this->ingest->ingestRadiology($hl7, [
+                'device_code' => $callingAe,
+                'protocol' => 'HL7',
+            ]);
+        } finally {
+            // Keep an index of every received DICOM object so the radiology
+            // workspace can list the image even when HL7 matching fails.
+            $this->recordImage($path, $elements, $sopUid, $message);
+        }
 
         return [
             'message' => $message,
@@ -212,6 +223,40 @@ class DicomStoreService
         }
 
         return implode("\r", $lines);
+    }
+
+    /**
+     * @param  array<int, array{group: int, element: int, vr: string, value: string}>  $elements
+     */
+    private function recordImage(
+        string $path,
+        array $elements,
+        string $sopUid,
+        ?RadiologyDeviceMessage $message,
+    ): void {
+        $orderId = $message
+            ? RadiologyOrder::query()->where('source_message_id', $message->id)->value('id')
+            : null;
+
+        $accession = DicomDataset::value($elements, 0x0008, 0x0050);
+        if (! $orderId && filled($accession)) {
+            $orderId = RadiologyOrder::query()->where('order_number', $accession)->value('id');
+        }
+
+        RadiologyImage::query()->updateOrCreate(
+            ['sop_uid' => $sopUid],
+            [
+                'radiology_order_id' => $orderId,
+                'radiology_device_id' => $message?->radiology_device_id,
+                'radiology_device_message_id' => $message?->id,
+                'disk' => (string) config('devices.dicom.storage_disk', 'local'),
+                'path' => $path,
+                'study_uid' => DicomDataset::value($elements, 0x0008, 0x0016),
+                'modality' => DicomDataset::value($elements, 0x0008, 0x0060),
+                'mime_type' => 'application/dicom',
+                'received_at' => now(),
+            ],
+        );
     }
 
     private function storeFile(string $bytes, string $sopUid): string
