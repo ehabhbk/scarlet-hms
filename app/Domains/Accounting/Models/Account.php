@@ -12,8 +12,17 @@ class Account extends Model
     use SoftDeletes;
 
     protected $fillable = [
-        'code', 'name_ar', 'name_en', 'type', 'parent_id', 'is_active', 'notes',
+        'code', 'name_ar', 'name_en', 'type', 'opening_balance', 'parent_id',
+        'is_active', 'notes',
     ];
+
+    protected function casts(): array
+    {
+        return [
+            'opening_balance' => 'decimal:2',
+            'is_active' => 'boolean',
+        ];
+    }
 
     public function parent(): BelongsTo
     {

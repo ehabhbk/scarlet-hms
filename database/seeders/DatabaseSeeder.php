@@ -13,10 +13,12 @@ class DatabaseSeeder extends Seeder
             OrganizationSeeder::class,
             UserSeeder::class,
             SettingSeeder::class,
+            ChartOfAccountsSeeder::class,
         ]);
 
         if (config('scarlet.seed_demo_data')) {
             $this->call(DemoClinicalSeeder::class);
+            $this->call(DemoAccountingSeeder::class);
         }
 
         $this->call(CatalogSeeder::class);

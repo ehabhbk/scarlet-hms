@@ -13,6 +13,7 @@ use App\Http\Controllers\Api\V1\AdmissionController;
 use App\Http\Controllers\Api\V1\BedController;
 use App\Http\Controllers\Api\V1\EmployeeController;
 use App\Http\Controllers\Api\V1\EncounterController;
+use App\Http\Controllers\Api\V1\ExpenseController;
 use App\Http\Controllers\Api\V1\InsuranceContractController;
 use App\Http\Controllers\Api\V1\LabDeviceController;
 use App\Http\Controllers\Api\V1\LabDeviceMessageController;
@@ -455,12 +456,38 @@ Route::prefix('v1')->group(function () {
         Route::post('accounts', [AccountingController::class, 'storeAccount'])
             ->middleware('permission:accounting.manage')
             ->name('api.accounts.store');
+        Route::get('accounts/{account}/ledger', [AccountingController::class, 'accountLedger'])
+            ->middleware('permission:accounting.view')
+            ->name('api.accounts.ledger');
+        Route::put('accounts/{account}', [AccountingController::class, 'updateAccount'])
+            ->middleware('permission:accounting.manage')
+            ->name('api.accounts.update');
+        Route::delete('accounts/{account}', [AccountingController::class, 'destroyAccount'])
+            ->middleware('permission:accounting.manage')
+            ->name('api.accounts.destroy');
+
         Route::get('journal-entries', [AccountingController::class, 'journalEntries'])
             ->middleware('permission:accounting.view')
             ->name('api.journal-entries.index');
         Route::post('journal-entries', [AccountingController::class, 'storeJournalEntry'])
             ->middleware('permission:accounting.manage')
             ->name('api.journal-entries.store');
+        Route::get('journal-entries/{journal_entry}', [AccountingController::class, 'showJournalEntry'])
+            ->middleware('permission:accounting.view')
+            ->name('api.journal-entries.show');
+        Route::put('journal-entries/{journal_entry}', [AccountingController::class, 'updateJournalEntry'])
+            ->middleware('permission:accounting.manage')
+            ->name('api.journal-entries.update');
+        Route::delete('journal-entries/{journal_entry}', [AccountingController::class, 'destroyJournalEntry'])
+            ->middleware('permission:accounting.manage')
+            ->name('api.journal-entries.destroy');
+
+        Route::get('accounting/chart-of-accounts', [AccountingController::class, 'chartOfAccounts'])
+            ->middleware('permission:accounting.view')
+            ->name('api.accounting.chart-of-accounts');
+        Route::get('accounting/ledger', [AccountingController::class, 'ledger'])
+            ->middleware('permission:accounting.view')
+            ->name('api.accounting.ledger');
         Route::get('accounting/trial-balance', [AccountingController::class, 'trialBalance'])
             ->middleware('permission:accounting.view')
             ->name('api.accounting.trial-balance');
@@ -470,9 +497,28 @@ Route::prefix('v1')->group(function () {
         Route::get('accounting/balance-sheet', [AccountingController::class, 'balanceSheet'])
             ->middleware('permission:accounting.view')
             ->name('api.accounting.balance-sheet');
-        Route::get('accounts/{account}/ledger', [AccountingController::class, 'ledger'])
+        Route::get('reports/profit-loss', [AccountingController::class, 'profitLoss'])
             ->middleware('permission:accounting.view')
-            ->name('api.accounts.ledger');
+            ->name('api.reports.profit-loss');
+        Route::get('reports/payment-methods', [AccountingController::class, 'paymentMethods'])
+            ->middleware('permission:accounting.view')
+            ->name('api.reports.payment-methods');
+
+        Route::get('expenses', [ExpenseController::class, 'index'])
+            ->middleware('permission:accounting.view')
+            ->name('api.expenses.index');
+        Route::post('expenses', [ExpenseController::class, 'store'])
+            ->middleware('permission:accounting.manage')
+            ->name('api.expenses.store');
+        Route::get('expenses/{expense}', [ExpenseController::class, 'show'])
+            ->middleware('permission:accounting.view')
+            ->name('api.expenses.show');
+        Route::put('expenses/{expense}', [ExpenseController::class, 'update'])
+            ->middleware('permission:accounting.manage')
+            ->name('api.expenses.update');
+        Route::delete('expenses/{expense}', [ExpenseController::class, 'destroy'])
+            ->middleware('permission:accounting.manage')
+            ->name('api.expenses.destroy');
 
         /*
         |--------------------------------------------------------------------------
